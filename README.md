@@ -11,7 +11,6 @@ This repository contains the full source code and documentation for the Air Qual
 - Local data logging to SD card
 - Buzzer-based threshold alerts
 - Low-cost hardware design based on ESP32 and Arduino
-- Fully open-source and customizable
 
 ## Hardware Components
 
