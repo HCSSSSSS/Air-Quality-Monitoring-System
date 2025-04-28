@@ -1,45 +1,54 @@
-										Arduino Uno R3
-#include <SoftwareSerial.h>
+											Arduino Uno R3
+// Include libraries for serial communication and MH-Z19 CO₂ sensor
+#include <SoftwareSerial.h> 
 #include <MHZ19.h>
 
-#define MQ2_PIN A0       // MQ-2 
-#define CO_PIN A1        // MICS-6814 CO 
-#define NO2_PIN A2       // MICS-6814 NO₂ 
-#define NH3_PIN A3       // MICS-6814 NH₃ 
+// Define analog input pins for gas sensors
+#define MQ2_PIN A0       // MQ-2 sensor for combustible gas detection
+#define CO_PIN A1        // MICS-6814 sensor channel for Carbon Monoxide (CO)
+#define NO2_PIN A2       // MICS-6814 sensor channel for Nitrogen Dioxide (NO₂)
+#define NH3_PIN A3       // MICS-6814 sensor channel for Ammonia (NH₃)
 
-#define RX_PIN 10        // Arduino RX 
-#define TX_PIN 11        // Arduino TX 
+// Define pins for SoftwareSerial communication
+#define RX_PIN 10        // Arduino receive pin for MH-Z19 sensor
+#define TX_PIN 11        // Arduino transmit pin for MH-Z19 sensor
+#define ESP_TX 3         // Arduino transmit pin to ESP32
+#define ESP_RX 2         // Arduino receive pin from ESP32
 
-#define ESP_TX 3         // Arduino TX 
-#define ESP_RX 2         // Arduino RX 
+// Create SoftwareSerial objects
+SoftwareSerial mySerial(RX_PIN, TX_PIN);     // Serial for MH-Z19 CO₂ sensor
+SoftwareSerial espSerial(ESP_RX, ESP_TX);    // Serial for communication with ESP32
 
-SoftwareSerial mySerial(RX_PIN, TX_PIN);
-SoftwareSerial espSerial(ESP_RX, ESP_TX);
+// Create MH-Z19 sensor object
 MHZ19 myMHZ19;
 
 void setup() {
-    Serial.begin(115200);        
-    espSerial.begin(115200);     
-    mySerial.begin(9600);        
-    myMHZ19.begin(mySerial);    
+    // Initialize hardware serial for debugging
+    Serial.begin(115200);
 
+    // Initialize software serial for ESP32 communication
+    espSerial.begin(115200);
+
+    // Initialize software serial for MH-Z19 sensor communication
+    mySerial.begin(9600);
+    myMHZ19.begin(mySerial);
+
+    // Display initialization message
     Serial.println("Arduino Initializing...");
-    delay(3000); 
+    delay(3000); // Wait for devices to stabilize
 }
 
 void loop() {
-   
+    // Read analog values from gas sensors
     int mq2Value = analogRead(MQ2_PIN);
-    
-
     int coValue = analogRead(CO_PIN);
     int no2Value = analogRead(NO2_PIN);
     int nh3Value = analogRead(NH3_PIN);
 
- 
+    // Read CO₂ concentration in ppm from MH-Z19 sensor
     int co2ppm = myMHZ19.getCO2();
 
-   
+    // Send sensor data to ESP32 via SoftwareSerial
     espSerial.print(mq2Value);
     espSerial.print(",");
     espSerial.print(coValue);
@@ -50,7 +59,7 @@ void loop() {
     espSerial.print(",");
     espSerial.println(co2ppm);
 
-  
+    // Output sensor readings to Serial Monitor for debugging
     Serial.println("====================================");
     Serial.print("Combustible gas (MQ-2): ");
     Serial.println(mq2Value);
@@ -70,11 +79,11 @@ void loop() {
 
     Serial.println("====================================");
 
-   
+    // Wait 10 seconds before next reading
     delay(10000);
 }
 
-											ESP32 
+										ESP32
 #include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
@@ -84,17 +93,17 @@ void loop() {
 #include <SdsDustSensor.h>
 #include <SPI.h>
 #include <SD.h>
-#include <time.h> 
+#include <time.h> // For NTP time synchronization
 
-// ========== 1) WiFi  ==========
-const char* ssid = "HCSS";          
-const char* password = "123456789"; 
-const char* serverUrl = "http://192.168.137.1:3000/upload"; 
+// ========== 1) WiFi Configuration ==========
+const char* ssid = "HCSS";          // Your WiFi Name
+const char* password = "123456789"; // Your WiFi password
+const char* serverUrl = "http://192.168.137.1:3000/upload"; // Your server address
 
 // ========== 2) NTP  ==========
 const char* ntpServer = "pool.ntp.org"; 
 const long gmtOffset_sec = 8 * 3600;      
-const int daylightOffset_sec = 0;         
+const int daylightOffset_sec = 0;        
 
 // ========== 3) OLED  ==========
 #define SCREEN_WIDTH 128
@@ -122,22 +131,22 @@ void setupDisplay() {
 #define SDS011_TX_PIN 26   // SDS011 RX -> ESP32 GPIO26
 
 // ========== 5) Global variables ==========
-int arduinoValues[5] = {0, 0, 0, 0, 0};  
-float pm25 = 0.0, pm10 = 0.0;           
+int arduinoValues[5] = {0, 0, 0, 0, 0}; // Raw data：MQ-2, CO, NO2, NH3, CO2
+float pm25 = 0.0, pm10 = 0.0;           // SDS011 data
 
- 
+// Add page control variables: 0 means display Arduino data (adjusted), 1 means display SDS011 data
 int currentPage = 0;
 
 // ========== 6) Timer ==========
 unsigned long previousDataTime = 0;
-const unsigned long dataInterval = 10000;  
+const unsigned long dataInterval = 10000; // Refresh data every 10 seconds
 unsigned long previousPageTime = 0;
-const unsigned long pageInterval = 5000;   
+const unsigned long pageInterval = 5000;  // Switch display pages every 5 seconds
 
-// ========== 7) OLED Display Function ==========
+// ========== 7) OLED display function ==========
+// Display Arduino data (adjusted data, consistent with the front end)：
 void displayArduinoData() {
- 
-  float coAdjusted  = arduinoValues[1] * 0.1;
+  float coAdjusted  = arduinoValues[1] * 0.1; 
   float no2Adjusted = arduinoValues[2] * 0.1; 
   float co2Adjusted = arduinoValues[4] / 2.0; 
 
@@ -176,6 +185,7 @@ void displayArduinoData() {
   display.display();
 }
 
+//  SDS011 
 void displaySDS011Data() {
   display.clearDisplay();
 
@@ -192,6 +202,7 @@ void displaySDS011Data() {
   display.display();
 }
 
+// Switch display content according to currentPage
 void updateDisplay() {
   if (currentPage == 0) {
     displayArduinoData();
@@ -200,12 +211,13 @@ void updateDisplay() {
   }
 }
 
-// ========== 8) SDS011  ==========
+// ========== 8) SDS011 Sensor Object ==========
 HardwareSerial sdsSerial(1);
 SdsDustSensor sds011(sdsSerial);
 
-// ========== 9) WiFi Data upload function ==========
+// ========== 9) WiFi data upload function ==========
 void sendToServer() {
+  // Construct JSON data and use the same adjustments as the frontend
   String jsonData = "{";
   jsonData += "\"mq2\":"  + String(arduinoValues[0]) + ",";
   jsonData += "\"co\":"   + String(arduinoValues[1] * 0.1) + ",";
@@ -234,13 +246,14 @@ void sendToServer() {
   }
 }
 
-// ========== 10) SD card ==========
+// ========== 10) SD Card Configuration ==========
 #define SD_CS_PIN 5
 bool sdInitialized = false;
 
-// ========== 11) Buzzer ==========
+// ========== 11) Buzzer Configuration ==========
 #define BUZZER_PIN 16  
 
+// Set the alarm threshold (unit based on raw data)
 const int THRESHOLD_MQ2    = 600;
 const int THRESHOLD_CO     = 1000;
 const int THRESHOLD_NO2    = 1500;
@@ -251,13 +264,13 @@ const float THRESHOLD_PM10 = 50.0;
 
 bool needAlarm = false;
 
-// ========== 12) NTP  ==========
+// ========== 12)NTP time synchronization ==========
 void setupTime() {
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   Serial.print("Syncing time");
   while (true) {
     time_t now = time(nullptr);
-    if (now > 8 * 3600) {  
+    if (now > 8 * 3600) { // Determine whether the synchronization is successful
       Serial.println("\nTime sync OK!");
       break;
     }
@@ -266,7 +279,7 @@ void setupTime() {
   }
 }
 
-// ========== 13) SD Card write function ==========
+// ========== 13)SD card write function ==========
 void writeDataToSD() {
   if (!sdInitialized) return;
 
@@ -303,10 +316,10 @@ void setup() {
   Serial.begin(115200);
   Serial.println("===== ESP32: Starting =====");
 
-   
+  // Initialize the OLED display
   setupDisplay();
 
-  
+  // Connect to WiFi
   Serial.print("Connecting WiFi: ");
   Serial.println(ssid);
   WiFi.begin(ssid, password);
@@ -318,25 +331,25 @@ void setup() {
   Serial.print("IP: ");
   Serial.println(WiFi.localIP());
 
-   
+  // Synchronize NTP time
   setupTime();
 
-   
+ // Initialize the serial port
   Serial2.begin(115200, SERIAL_8N1, ARDUINO_RX_PIN, ARDUINO_TX_PIN);
   Serial.println("Serial2 (Arduino) ready.");
   sdsSerial.begin(9600, SERIAL_8N1, SDS011_RX_PIN, SDS011_TX_PIN);
   Serial.println("SDS011 ready.");
 
-  
+  //SDS011 active mode
   sds011.setActiveReportingMode();
 
   previousDataTime = millis();
   previousPageTime = millis();
 
- 
+  // Initialize the buzzer pin
   pinMode(BUZZER_PIN, OUTPUT);
 
-   
+  // Initialize SD card
   Serial.println("Init SD...");
   if (!SD.begin(SD_CS_PIN)) {
     Serial.println("SD failed, no file logging!");
@@ -346,7 +359,7 @@ void setup() {
     sdInitialized = true;
   }
 
-  
+  // Initial display
   updateDisplay();
 }
 
@@ -354,11 +367,11 @@ void setup() {
 void loop() {
   unsigned long currentMillis = millis();
 
-   
+  // Refresh data every 10 seconds
   if (currentMillis - previousDataTime >= dataInterval) {
     previousDataTime = currentMillis;
 
-    
+    // 1) Read SDS011 data (PM2.5 and PM10)
     PmResult pm = sds011.queryPm();
     if (pm.isOk()) {
       pm25 = pm.pm25;
@@ -368,7 +381,7 @@ void loop() {
       Serial.println("SDS011 read failed.");
     }
 
- 
+    // 2) Read Arduino data (from Serial2)
     if (Serial2.available()) {
       String data = Serial2.readStringUntil('\n');
       Serial.println("Got Arduino data: " + data);
@@ -394,23 +407,23 @@ void loop() {
       Serial.println("No Arduino data.");
     }
 
-    
+    // 3) Update OLED display (display corresponding data according to the current page)
     updateDisplay();
 
-    
+    // Page switching: switch the display page every 5 seconds
     if (currentMillis - previousPageTime >= pageInterval) {
       previousPageTime = currentMillis;
       currentPage = (currentPage + 1) % 2;
       updateDisplay();
     }
 
-  
+    // 4) Upload data to the server
     sendToServer();
 
-    
+    // 5) Write to SD card (append timestamp)
     writeDataToSD();
 
-     
+    // 6) Determine whether the threshold is exceeded and trigger the buzzer (the alarm judgment is based on the original data)
     needAlarm = false;
     if (arduinoValues[0] > THRESHOLD_MQ2) needAlarm = true; // MQ2
     if (arduinoValues[1] > THRESHOLD_CO)  needAlarm = true; // CO
@@ -431,6 +444,7 @@ void loop() {
 
   delay(100);
 }
+
 												Server.js 
 // server.js
 const express = require('express');
@@ -438,35 +452,35 @@ const bodyParser = require('body-parser');
 const cors = require('cors');
 
 const app = express();
-
+// Parsing JSON request body
 app.use(bodyParser.json());
-
+// Allow cross-domain
 app.use(cors());
 
-
+// Used to store the latest sensor data
 let sensorData = {};
 
-
+// ESP32 uploads data (POST /upload)
 app.post('/upload', (req, res) => {
-  console.log(" Receives data:", req.body);
+  console.log("Receive data:", req.body);
   if (!req.body || typeof req.body !== 'object') {
-    return res.status(400).json({ error: "Data format error: must be JSON" });
+    return res.status(400).json({ error: "Data format error: must be  JSON" });
   }
-   
+  // Add timestamp to the data
   sensorData = { ...req.body, timestamp: new Date().toISOString() };
-  console.log(" Latest data:", sensorData);
+  console.log(" latest data:", sensorData);
   res.json({ message: "Data received successfully" });
 });
 
- 
+// The front end gets the latest data (GET /data)
 app.get('/data', (req, res) => {
   res.json(sensorData);
 });
 
- ）
+// Listen to port 3000 and bind to 0.0.0.0 (allow LAN access)
 const PORT = 3000;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(` The server runs on http://0.0.0.0:${PORT}`);
+  console.log(` The server is running at http://0.0.0.0:${PORT}`);
   console.log(`You can access it in the same LAN using "http://<your computer IP>:${PORT}"`);
 });
 											AirQualityDashboard.vue
@@ -508,7 +522,7 @@ app.listen(PORT, '0.0.0.0', () => {
     },
     data() {
       return {
-       
+        // Line chart data
         chartData: {
           labels: [],
           datasets: [
@@ -540,7 +554,7 @@ app.listen(PORT, '0.0.0.0', () => {
             }
           }
         },
-      
+       // WHO reference data (table on the right)
         whoData: [
           { param: 'CO',    standard: '15 min: 100 mg/m³, 1h: 35 mg/m³' },
           { param: 'PM2.5', standard: '24h: 25 µg/m³, Annual: 10 µg/m³' },
@@ -553,18 +567,18 @@ app.listen(PORT, '0.0.0.0', () => {
       }
     },
     methods: {
-     
+      // Pull sensor data from the backend
       fetchSensorData() {
         axios.get('http://127.0.0.1:3000/data')
           .then(res => {
             const data = res.data
-          
+            // Timeline label
             const label = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString()
-           
+            // Push new PM2.5, PM10 to chartData
             this.chartData.labels.push(label)
             this.chartData.datasets[0].data.push(data.pm25) // PM2.5
             this.chartData.datasets[1].data.push(data.pm10) // PM10
-           
+            // Keep the last 10 points
             if (this.chartData.labels.length > 10) {
               this.chartData.labels.shift()
               this.chartData.datasets.forEach(ds => ds.data.shift())
@@ -575,14 +589,16 @@ app.listen(PORT, '0.0.0.0', () => {
           })
       },
       startTimer() {
-  
+        // Get data every 5 seconds
         setInterval(() => {
           this.fetchSensorData()
         }, 5000)
       }
     },
     mounted() {
+     // Initialize and get it once
       this.fetchSensorData()
+      // Start timed refresh
       this.startTimer()
     }
   }
@@ -620,6 +636,7 @@ app.listen(PORT, '0.0.0.0', () => {
   cursor: pointer;
 }
   </style>
+  
   											LineChart.vue
 <template>
   <div ref="chartRef" style="width: 100%; height: 400px;"></div>
@@ -749,7 +766,7 @@ export default {
 											SensorData.vue
 <template>
   <div class="sensor-data">
-    <h2>Sensor Value</h2>
+    <h2>Sensor data</h2>
     <p>MQ-2: {{ sensorData.mq2 }} ppm</p>
     <p>CO: {{ sensorData.co }} ppm</p>
     <p>NO2: {{ sensorData.no2 }} ppb</p>
@@ -758,7 +775,7 @@ export default {
     <p>PM2.5: {{ sensorData.pm25 }} µg/m³</p>
     <p>PM10: {{ sensorData.pm10 }} µg/m³</p>
     <p v-if="sensorData.timestamp">
-      Time: {{ new Date(sensorData.timestamp).toLocaleString() }}
+      time: {{ new Date(sensorData.timestamp).toLocaleString() }}
     </p>
     <button @click="fetchData">Refresh Data</button>
   </div>
@@ -795,7 +812,9 @@ export default {
     }
   },
   mounted() {
+    // Get it once after the component is loaded
     this.fetchData()
+    // Automatically refresh every 10 seconds
     setInterval(this.fetchData, 10000)
   }
 }
@@ -827,6 +846,7 @@ export default {
   cursor: pointer;
 }
 </style>
+
 												APP.vue
 <template>
   <div id="app">
