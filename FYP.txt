@@ -1,0 +1,863 @@
+										Arduino Uno R3
+#include <SoftwareSerial.h>
+#include <MHZ19.h>
+
+#define MQ2_PIN A0       // MQ-2 
+#define CO_PIN A1        // MICS-6814 CO 
+#define NO2_PIN A2       // MICS-6814 NO₂ 
+#define NH3_PIN A3       // MICS-6814 NH₃ 
+
+#define RX_PIN 10        // Arduino RX 
+#define TX_PIN 11        // Arduino TX 
+
+#define ESP_TX 3         // Arduino TX 
+#define ESP_RX 2         // Arduino RX 
+
+SoftwareSerial mySerial(RX_PIN, TX_PIN);
+SoftwareSerial espSerial(ESP_RX, ESP_TX);
+MHZ19 myMHZ19;
+
+void setup() {
+    Serial.begin(115200);        
+    espSerial.begin(115200);     
+    mySerial.begin(9600);        
+    myMHZ19.begin(mySerial);    
+
+    Serial.println("Arduino Initializing...");
+    delay(3000); 
+}
+
+void loop() {
+   
+    int mq2Value = analogRead(MQ2_PIN);
+    
+
+    int coValue = analogRead(CO_PIN);
+    int no2Value = analogRead(NO2_PIN);
+    int nh3Value = analogRead(NH3_PIN);
+
+ 
+    int co2ppm = myMHZ19.getCO2();
+
+   
+    espSerial.print(mq2Value);
+    espSerial.print(",");
+    espSerial.print(coValue);
+    espSerial.print(",");
+    espSerial.print(no2Value);
+    espSerial.print(",");
+    espSerial.print(nh3Value);
+    espSerial.print(",");
+    espSerial.println(co2ppm);
+
+  
+    Serial.println("====================================");
+    Serial.print("Combustible gas (MQ-2): ");
+    Serial.println(mq2Value);
+    
+    Serial.print("CO (MICS-6814): ");
+    Serial.println(coValue);
+
+    Serial.print("NO₂ (MICS-6814): ");
+    Serial.println(no2Value);
+
+    Serial.print("NH₃ (MICS-6814): ");
+    Serial.println(nh3Value);
+
+    Serial.print("CO₂ (MH-Z19B): ");
+    Serial.print(co2ppm);
+    Serial.println(" ppm");
+
+    Serial.println("====================================");
+
+   
+    delay(10000);
+}
+
+											ESP32 
+#include <Arduino.h>
+#include <WiFi.h>
+#include <HTTPClient.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <SdsDustSensor.h>
+#include <SPI.h>
+#include <SD.h>
+#include <time.h> 
+
+// ========== 1) WiFi  ==========
+const char* ssid = "HCSS";          
+const char* password = "123456789"; 
+const char* serverUrl = "http://192.168.137.1:3000/upload"; 
+
+// ========== 2) NTP  ==========
+const char* ntpServer = "pool.ntp.org"; 
+const long gmtOffset_sec = 8 * 3600;      
+const int daylightOffset_sec = 0;         
+
+// ========== 3) OLED  ==========
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET   -1
+#define SCREEN_ADDRESS 0x3C
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+void setupDisplay() {
+  if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
+    Serial.println(F("OLED Display initialization failed!"));
+    for (;;);
+  }
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.display();
+}
+
+// ========== 4) Serial port definition ==========
+#define ARDUINO_RX_PIN 4   // Arduino TX -> ESP32 GPIO4
+#define ARDUINO_TX_PIN 17  // Arduino RX -> ESP32 GPIO17
+#define SDS011_RX_PIN 25   // SDS011 TX -> ESP32 GPIO25
+#define SDS011_TX_PIN 26   // SDS011 RX -> ESP32 GPIO26
+
+// ========== 5) Global variables ==========
+int arduinoValues[5] = {0, 0, 0, 0, 0};  
+float pm25 = 0.0, pm10 = 0.0;           
+
+ 
+int currentPage = 0;
+
+// ========== 6) Timer ==========
+unsigned long previousDataTime = 0;
+const unsigned long dataInterval = 10000;  
+unsigned long previousPageTime = 0;
+const unsigned long pageInterval = 5000;   
+
+// ========== 7) OLED Display Function ==========
+void displayArduinoData() {
+ 
+  float coAdjusted  = arduinoValues[1] * 0.1;
+  float no2Adjusted = arduinoValues[2] * 0.1; 
+  float co2Adjusted = arduinoValues[4] / 2.0; 
+
+  display.clearDisplay();
+
+  // Combustible Gas (MQ-2)
+  display.setCursor(0, 0);
+  display.print("Gas: ");
+  display.print(arduinoValues[0]);
+  display.print(" ppm");
+
+  // CO
+  display.setCursor(0, 8);
+  display.print("CO: ");
+  display.print(coAdjusted, 1);
+  display.print(" ppm");
+
+  // NO2
+  display.setCursor(0, 16);
+  display.print("NO2: ");
+  display.print(no2Adjusted, 1);
+  display.print(" ppb");
+
+  // NH3 
+  display.setCursor(0, 24);
+  display.print("NH3: ");
+  display.print(arduinoValues[3]);
+  display.print(" ppb");
+
+  // CO2
+  display.setCursor(0, 32);
+  display.print("CO2: ");
+  display.print(co2Adjusted, 1);
+  display.print(" ppm");
+
+  display.display();
+}
+
+void displaySDS011Data() {
+  display.clearDisplay();
+
+  display.setCursor(0, 0);
+  display.print("PM2.5: ");
+  display.print(pm25 + 10, 1);
+  display.print(" ug/m3");
+
+  display.setCursor(0, 8);
+  display.print("PM10: ");
+  display.print(pm10 + 10, 1);
+  display.print(" ug/m3");
+
+  display.display();
+}
+
+void updateDisplay() {
+  if (currentPage == 0) {
+    displayArduinoData();
+  } else {
+    displaySDS011Data();
+  }
+}
+
+// ========== 8) SDS011  ==========
+HardwareSerial sdsSerial(1);
+SdsDustSensor sds011(sdsSerial);
+
+// ========== 9) WiFi Data upload function ==========
+void sendToServer() {
+  String jsonData = "{";
+  jsonData += "\"mq2\":"  + String(arduinoValues[0]) + ",";
+  jsonData += "\"co\":"   + String(arduinoValues[1] * 0.1) + ",";
+  jsonData += "\"no2\":"  + String(arduinoValues[2] * 0.1) + ",";
+  jsonData += "\"nh3\":"  + String(arduinoValues[3]) + ",";
+  jsonData += "\"co2\":"  + String(arduinoValues[4] / 2.0) + ",";
+  jsonData += "\"pm25\":" + String(pm25 + 10 , 1) + ",";
+  jsonData += "\"pm10\":" + String(pm10 + 10 , 1);
+  jsonData += "}";
+
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    http.begin(serverUrl);
+    http.addHeader("Content-Type", "application/json");
+
+    Serial.print("Sending JSON: ");
+    Serial.println(jsonData);
+
+    int httpResponseCode = http.POST(jsonData);
+    Serial.print("HTTP Response Code: ");
+    Serial.println(httpResponseCode);
+
+    http.end();
+  } else {
+    Serial.println("WiFi not connected!");
+  }
+}
+
+// ========== 10) SD card ==========
+#define SD_CS_PIN 5
+bool sdInitialized = false;
+
+// ========== 11) Buzzer ==========
+#define BUZZER_PIN 16  
+
+const int THRESHOLD_MQ2    = 600;
+const int THRESHOLD_CO     = 1000;
+const int THRESHOLD_NO2    = 1500;
+const int THRESHOLD_NH3    = 1200;
+const int THRESHOLD_CO2    = 2000;
+const float THRESHOLD_PM25 = 25.0;
+const float THRESHOLD_PM10 = 50.0;
+
+bool needAlarm = false;
+
+// ========== 12) NTP  ==========
+void setupTime() {
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  Serial.print("Syncing time");
+  while (true) {
+    time_t now = time(nullptr);
+    if (now > 8 * 3600) {  
+      Serial.println("\nTime sync OK!");
+      break;
+    }
+    Serial.print(".");
+    delay(1000);
+  }
+}
+
+// ========== 13) SD Card write function ==========
+void writeDataToSD() {
+  if (!sdInitialized) return;
+
+  File file = SD.open("/sensor_data.csv", FILE_APPEND);
+  if (!file) {
+    Serial.println("Failed to open sensor_data.csv for writing!");
+    return;
+  }
+
+  if (file.size() == 0) {
+    file.println("MQ2,CO,NO2,NH3,CO2,PM2.5,PM10,Time");
+  }
+
+  time_t now = time(nullptr);
+  struct tm* timeinfo = localtime(&now);
+  char timeString[25];
+  strftime(timeString, sizeof(timeString), "%F %T", timeinfo);
+
+  file.print(arduinoValues[0]); file.print(",");
+  file.print(arduinoValues[1] * 0.1); file.print(",");
+  file.print(arduinoValues[2] * 0.1); file.print(",");
+  file.print(arduinoValues[3]); file.print(",");
+  file.print(arduinoValues[4] / 2.0); file.print(",");
+  file.print(pm25 + 10, 1);          file.print(",");
+  file.print(pm10 + 10, 1);          file.print(",");
+  file.println(timeString);
+
+  file.close();
+  Serial.println("Data saved to sensor_data.csv");
+}
+
+// ========== 14) setup() function ==========
+void setup() {
+  Serial.begin(115200);
+  Serial.println("===== ESP32: Starting =====");
+
+   
+  setupDisplay();
+
+  
+  Serial.print("Connecting WiFi: ");
+  Serial.println(ssid);
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi Connected!");
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
+
+   
+  setupTime();
+
+   
+  Serial2.begin(115200, SERIAL_8N1, ARDUINO_RX_PIN, ARDUINO_TX_PIN);
+  Serial.println("Serial2 (Arduino) ready.");
+  sdsSerial.begin(9600, SERIAL_8N1, SDS011_RX_PIN, SDS011_TX_PIN);
+  Serial.println("SDS011 ready.");
+
+  
+  sds011.setActiveReportingMode();
+
+  previousDataTime = millis();
+  previousPageTime = millis();
+
+ 
+  pinMode(BUZZER_PIN, OUTPUT);
+
+   
+  Serial.println("Init SD...");
+  if (!SD.begin(SD_CS_PIN)) {
+    Serial.println("SD failed, no file logging!");
+    sdInitialized = false;
+  } else {
+    Serial.println("SD OK.");
+    sdInitialized = true;
+  }
+
+  
+  updateDisplay();
+}
+
+// ========== 15) loop() function ==========
+void loop() {
+  unsigned long currentMillis = millis();
+
+   
+  if (currentMillis - previousDataTime >= dataInterval) {
+    previousDataTime = currentMillis;
+
+    
+    PmResult pm = sds011.queryPm();
+    if (pm.isOk()) {
+      pm25 = pm.pm25;
+      pm10 = pm.pm10;
+      Serial.printf("SDS011: PM2.5=%.1f, PM10=%.1f\n", pm25, pm10);
+    } else {
+      Serial.println("SDS011 read failed.");
+    }
+
+ 
+    if (Serial2.available()) {
+      String data = Serial2.readStringUntil('\n');
+      Serial.println("Got Arduino data: " + data);
+      int values[5];
+      int index = 0;
+      char *ptr = strtok((char*)data.c_str(), ",");
+      while (ptr != NULL && index < 5) {
+        values[index++] = atoi(ptr);
+        ptr = strtok(NULL, ",");
+      }
+      if (index == 5) {
+        for (int i = 0; i < 5; i++) {
+          arduinoValues[i] = values[i];
+        }
+        Serial.printf("Arduino: MQ2=%d, CO=%d, NO2=%d, NH3=%d, CO2=%d\n",
+                      arduinoValues[0], arduinoValues[1],
+                      arduinoValues[2], arduinoValues[3],
+                      arduinoValues[4]);
+      } else {
+        Serial.println("Arduino data parse error!");
+      }
+    } else {
+      Serial.println("No Arduino data.");
+    }
+
+    
+    updateDisplay();
+
+    
+    if (currentMillis - previousPageTime >= pageInterval) {
+      previousPageTime = currentMillis;
+      currentPage = (currentPage + 1) % 2;
+      updateDisplay();
+    }
+
+  
+    sendToServer();
+
+    
+    writeDataToSD();
+
+     
+    needAlarm = false;
+    if (arduinoValues[0] > THRESHOLD_MQ2) needAlarm = true; // MQ2
+    if (arduinoValues[1] > THRESHOLD_CO)  needAlarm = true; // CO
+    if (arduinoValues[2] > THRESHOLD_NO2) needAlarm = true; // NO2
+    if (arduinoValues[3] > THRESHOLD_NH3) needAlarm = true; // NH3
+    if (arduinoValues[4] > THRESHOLD_CO2) needAlarm = true; // CO2
+    if (pm25 > THRESHOLD_PM25)            needAlarm = true; // PM2.5
+    if (pm10 > THRESHOLD_PM10)            needAlarm = true; // PM10
+
+    if (needAlarm) {
+      Serial.println("Sensor values exceed thresholds, triggering alarm beep!");
+      tone(BUZZER_PIN, 4000, 300);
+    } else {
+      noTone(BUZZER_PIN);
+      Serial.println("Values normal, no alarm.");
+    }
+  }
+
+  delay(100);
+}
+												Server.js 
+// server.js
+const express = require('express');
+const bodyParser = require('body-parser');
+const cors = require('cors');
+
+const app = express();
+
+app.use(bodyParser.json());
+
+app.use(cors());
+
+
+let sensorData = {};
+
+
+app.post('/upload', (req, res) => {
+  console.log(" Receives data:", req.body);
+  if (!req.body || typeof req.body !== 'object') {
+    return res.status(400).json({ error: "Data format error: must be JSON" });
+  }
+   
+  sensorData = { ...req.body, timestamp: new Date().toISOString() };
+  console.log(" Latest data:", sensorData);
+  res.json({ message: "Data received successfully" });
+});
+
+ 
+app.get('/data', (req, res) => {
+  res.json(sensorData);
+});
+
+ ）
+const PORT = 3000;
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(` The server runs on http://0.0.0.0:${PORT}`);
+  console.log(`You can access it in the same LAN using "http://<your computer IP>:${PORT}"`);
+});
+											AirQualityDashboard.vue
+<template>
+    <div class="dashboard-container">
+
+      <!-- Left: Line chart -->
+      <div class="chart-section">
+        <line-chart :chart-data="chartData" :options="chartOptions"/>
+      </div>
+      <!-- Right: WHO reference data sheet -->
+      <div class="who-section">
+        <h3>WHO Reference Data</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Parameter</th>
+              <th>WHO Standard</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(item, idx) in whoData" :key="idx">
+              <td>{{ item.param }}</td>
+              <td>{{ item.standard }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </template>
+  
+  <script>
+  import axios from 'axios'
+  import LineChart from './lineChart.vue'
+  export default {
+    name: 'AirQualityDashboard',
+    components: {
+      'line-chart': LineChart
+    },
+    data() {
+      return {
+       
+        chartData: {
+          labels: [],
+          datasets: [
+            {
+              label: 'PM2.5 (µg/m³)',
+              borderColor: 'rgba(54, 162, 235, 1)',
+              backgroundColor: 'rgba(54, 162, 235, 0.2)',
+              fill: false,
+              data: []
+            },
+            {
+              label: 'PM10 (µg/m³)',
+              borderColor: 'rgba(255, 99, 132, 1)',
+              backgroundColor: 'rgba(255, 99, 132, 0.2)',
+              fill: false,
+              data: []
+            }
+          ]
+        },
+        chartOptions: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            x: {
+              title: { display: true, text: 'Time' }
+            },
+            y: {
+              title: { display: true, text: 'Concentration' }
+            }
+          }
+        },
+      
+        whoData: [
+          { param: 'CO',    standard: '15 min: 100 mg/m³, 1h: 35 mg/m³' },
+          { param: 'PM2.5', standard: '24h: 25 µg/m³, Annual: 10 µg/m³' },
+          { param: 'PM10',  standard: '24h: 50 µg/m³, Annual: 20 µg/m³' },
+          { param: 'NO2',   standard: '1h: 200 µg/m³, Annual: 40 µg/m³' },
+          { param: 'NH3',   standard: 'No clear WHO standard' },
+          { param: 'CH2O',  standard: '30 min: 0.1 mg/m³ (Formaldehyde)' },
+          { param: 'CO2',   standard: 'Recommended < 1000 ppm' }
+        ]
+      }
+    },
+    methods: {
+     
+      fetchSensorData() {
+        axios.get('http://127.0.0.1:3000/data')
+          .then(res => {
+            const data = res.data
+          
+            const label = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString()
+           
+            this.chartData.labels.push(label)
+            this.chartData.datasets[0].data.push(data.pm25) // PM2.5
+            this.chartData.datasets[1].data.push(data.pm10) // PM10
+           
+            if (this.chartData.labels.length > 10) {
+              this.chartData.labels.shift()
+              this.chartData.datasets.forEach(ds => ds.data.shift())
+            }
+          })
+          .catch(err => {
+            console.error('Error fetching sensor data:', err)
+          })
+      },
+      startTimer() {
+  
+        setInterval(() => {
+          this.fetchSensorData()
+        }, 5000)
+      }
+    },
+    mounted() {
+      this.fetchSensorData()
+      this.startTimer()
+    }
+  }
+  </script>
+  
+  <style scoped>
+  .dashboard-container {
+    display: flex;
+    gap: 20px;
+    height: 500px;
+  }
+  .chart-section {
+    flex: 1;
+    border: 1px solid #ccc;
+    position: relative;
+  }
+  .who-section {
+    width: 300px;
+    border: 1px solid #ccc;
+    padding: 10px;
+  }
+  .who-section table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  .who-section th, .who-section td {
+    border: 1px solid #aaa;
+    padding: 6px;
+    text-align: left;
+  }
+  .buttontest {
+  font-size: 20px;
+  padding: 10px 20px;
+  margin-top: 20px;
+  cursor: pointer;
+}
+  </style>
+  											LineChart.vue
+<template>
+  <div ref="chartRef" style="width: 100%; height: 400px;"></div>
+</template>
+
+<script>
+import { markRaw } from 'vue';
+import * as echarts from 'echarts';
+
+export default {
+  props: {
+    chartData: {
+      type: Object,
+      required: true
+    },
+    options: {
+      type: Object,
+      required: true
+    },
+    test: {
+      type: String
+    }
+  },
+  data() {
+    return {
+      myChart: null
+    };
+  },
+  mounted() {
+    this.initChart();
+  },
+  watch: {
+    chartData: {
+      handler() {
+        this.updateChart();
+      },
+      deep: true
+    },
+    options: {
+      handler() {
+        this.updateChart();
+      },
+      deep: true
+    }
+  },
+  methods: {
+    initChart() {
+      const chartRef = this.$refs.chartRef;
+      this.myChart = markRaw(echarts.init(chartRef));
+      const option = this.generateChartOption();
+      this.myChart.setOption(option);
+    },
+    updateChart() {
+      if (this.myChart) {
+        const option = this.generateChartOption();
+        this.myChart.setOption(option, true);
+      }
+    },
+    generateChartOption() {
+      const thresholds = {
+        'PM2.5 (µg/m³)': 15,
+        'PM10 (µg/m³)': 25,
+        'CO (ppm)': 10,
+        'NO2 (ppb)': 30,
+        'NH3 (ppb)': 1000,
+        'MQ2 (ppm)': 300,
+        'CO2 (ppm)': 1000
+      };
+
+      const markLines = this.chartData.datasets.map((dataset) => {
+        const threshold = thresholds[dataset.label];
+        return {
+          name: `${dataset.label} Threshold`,
+          data: [
+            {
+              yAxis: threshold
+            }
+          ],
+          lineStyle: {
+            color: dataset.borderColor,
+            type: 'dashed'
+          }
+        };
+      });
+
+      return {
+        tooltip: {
+          trigger: 'axis'
+        },
+        legend: {
+          data: this.chartData.datasets.map(dataset => dataset.label)
+        },
+        xAxis: {
+          type: 'category',
+          data: this.chartData.labels,
+          name: this.options.scales.x.title.text
+        },
+        yAxis: {
+          type: 'value',
+          name: this.options.scales.y.title.text
+        },
+        series: this.chartData.datasets.map(dataset => ({
+          name: dataset.label,
+          type: 'bar',
+          data: dataset.data,
+          lineStyle: {
+            color: dataset.borderColor
+          },
+          itemStyle: {
+            color: dataset.borderColor
+          },
+          areaStyle: {
+            color: dataset.backgroundColor
+          },
+          fill: dataset.fill,
+          markLine: {
+            silent: true,
+            data: markLines.find(ml => ml.name.includes(dataset.label)).data,
+            lineStyle: markLines.find(ml => ml.name.includes(dataset.label)).lineStyle
+          }
+        }))
+      };
+    }
+  }
+};
+</script>    
+											SensorData.vue
+<template>
+  <div class="sensor-data">
+    <h2>Sensor Value</h2>
+    <p>MQ-2: {{ sensorData.mq2 }} ppm</p>
+    <p>CO: {{ sensorData.co }} ppm</p>
+    <p>NO2: {{ sensorData.no2 }} ppb</p>
+    <p>NH3: {{ sensorData.nh3 }} ppb</p>
+    <p>CO2: {{ sensorData.co2 }} ppm</p>
+    <p>PM2.5: {{ sensorData.pm25 }} µg/m³</p>
+    <p>PM10: {{ sensorData.pm10 }} µg/m³</p>
+    <p v-if="sensorData.timestamp">
+      Time: {{ new Date(sensorData.timestamp).toLocaleString() }}
+    </p>
+    <button @click="fetchData">Refresh Data</button>
+  </div>
+</template>
+
+<script>
+import axios from 'axios'
+
+export default {
+  name: 'SensorData',
+  data() {
+    return {
+      sensorData: {
+        mq2: 0,
+        co: 0,
+        no2: 0,
+        nh3: 0,
+        co2: 0,
+        pm25: 0,
+        pm10: 0,
+        timestamp: ''
+      }
+    }
+  },
+  methods: {
+    fetchData() {
+      axios.get('http://192.168.137.1:3000/data')
+        .then(response => {
+          this.sensorData = response.data
+        })
+        .catch(err => {
+          console.error('Failed to obtain data:', err)
+        })
+    }
+  },
+  mounted() {
+    this.fetchData()
+    setInterval(this.fetchData, 10000)
+  }
+}
+</script>
+
+<style scoped>
+.sensor-data {
+  text-align: center;
+  font-size: 24px;
+  line-height: 1.6;
+  max-width: 600px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.sensor-data h2 {
+  font-size: 28px;
+  margin-bottom: 20px;
+}
+
+.sensor-data p {
+  margin: 8px 0;
+}
+
+.sensor-data button {
+  font-size: 20px;
+  padding: 10px 20px;
+  margin-top: 20px;
+  cursor: pointer;
+}
+</style>
+												APP.vue
+<template>
+  <div id="app">
+    <AirQualityDashboard />
+  </div>
+</template>
+
+<script>
+import AirQualityDashboard from './components/AirQualityDashboard.vue'
+
+export default {
+  name: 'App',
+  components: {
+    AirQualityDashboard
+  }
+}
+</script>
+
+<style>
+#app {
+  font-family: Avenir, Helvetica, Arial, sans-serif;
+  text-align: center;
+  color: #2c3e50;
+  margin-top: 0;
+}
+nav a {
+  margin: 0 10px;
+  font-weight: bold;
+  color: #2c3e50;
+}
+nav a.router-link-exact-active {
+  color: #42b983;
+}
+</style>
